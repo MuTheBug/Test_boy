@@ -22,8 +22,22 @@ import sys
 try:
     from apis import TELEGRAM_API_TOKEN, TELEGRAM_CHAT_ID
 except ImportError:
-    print("ERROR: Please create apis.py file with TELEGRAM_API_TOKEN and TELEGRAM_CHAT_ID")
-    sys.exit(1)
+    print("ERROR: Critical - apis.py missing or TELEGRAM_API_TOKEN/TELEGRAM_CHAT_ID not found.")
+    sys.exit(1) # Exit if Telegram keys are not found
+
+try:
+    from apis import BYBIT_API_KEY, BYBIT_SECRET_KEY
+    print("INFO: Bybit API keys found.")
+except ImportError:
+    BYBIT_API_KEY, BYBIT_SECRET_KEY = None, None
+    print("INFO: Bybit API keys not found in apis.py.")
+
+try:
+    from apis import BINGX_API_KEY, BINGX_SECRET_KEY
+    print("INFO: BingX API keys found.")
+except ImportError:
+    BINGX_API_KEY, BINGX_SECRET_KEY = None, None
+    print("INFO: BingX API keys not found in apis.py.")
 
 # Configure logging
 logging.basicConfig(
@@ -157,6 +171,178 @@ class BybitClient:
                 'volume': float(candle[5])
             })
         
+        return klines
+
+class BingXClient:
+    """Client for BingX API interactions"""
+
+    def __init__(self, api_key=None, secret_key=None):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.base_url = "https://open-api.bingx.com"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'User-Agent': 'CryptoTradingBot/1.0'
+        })
+        if self.api_key:
+            self.session.headers.update({'X-BX-APIKEY': self.api_key})
+
+        # Using a slightly more conservative rate limit for BingX as an initial guess
+        self.rate_limiter = RateLimiter(max_requests=5, time_window=1)
+
+    def _sign_request(self, params):
+        """Placeholder for signing requests. Not used for public GET endpoints if API key in header is sufficient."""
+        # In a real scenario, this would involve:
+        # 1. Adding a timestamp to params.
+        # 2. Sorting params alphabetically.
+        # 3. Creating a query string.
+        # 4. Signing the string with HMAC-SHA256 using self.secret_key.
+        # 5. Adding the signature to params or headers.
+        # For now, as get_symbols and get_klines are often public, we assume API key in header is enough.
+        # If secret_key is present, one might add a signature parameter, e.g.
+        # if self.secret_key:
+        #     # Simplified: actual signature generation would be more complex
+        #     # query_string = '&'.join([f"{k}={params[k]}" for k in sorted(params.keys())])
+        #     # signature = hmac.new(self.secret_key.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        #     # params['signature'] = signature
+        #     pass # No actual signing implemented for this placeholder
+        return params
+
+    def make_request(self, method, endpoint, params=None, max_retries=5):
+        """Make HTTP request with retry logic for BingX"""
+        url = f"{self.base_url}{endpoint}"
+        params = params or {}
+
+        # Apply signing if needed (though current public methods might not need it)
+        # params = self._sign_request(params)
+
+        for attempt in range(max_retries):
+            try:
+                self.rate_limiter.wait_if_needed()
+                logger.debug(f"Making BingX request to {endpoint} with params {params} (attempt {attempt + 1}/{max_retries})")
+
+                response = self.session.request(method.upper(), url, params=params if method.upper() == 'GET' else None,
+                                                json=params if method.upper() != 'GET' else None, timeout=10)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    # BingX success code is typically 0
+                    if data.get('code') == 0:
+                        return data.get('data') # Common for BingX
+                    else:
+                        logger.warning(f"BingX API error: Code {data.get('code')}, Msg: {data.get('msg')}")
+                elif response.status_code == 429: # Too Many Requests
+                    logger.warning("BingX rate limit hit (429), waiting 60 seconds...")
+                    time.sleep(60) # Standard wait time for rate limit
+                elif response.status_code == 401: # Unauthorized
+                     logger.error(f"BingX API authentication error (401): {response.text}. Check API key and permissions.")
+                     break # No point retrying auth errors usually
+                elif response.status_code == 403: # Forbidden
+                     logger.error(f"BingX API access forbidden (403): {response.text}. Check IP whitelist or endpoint permissions.")
+                     break # No point retrying auth errors usually
+                else:
+                    logger.warning(f"BingX HTTP error {response.status_code}: {response.text}")
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"BingX request failed: {e}")
+            except Exception as e: # Catch any other unexpected errors
+                logger.error(f"Unexpected error during BingX request: {e}")
+
+            if attempt < max_retries - 1:
+                wait_time = min(2 ** attempt, 30) # Exponential backoff
+                logger.info(f"Retrying BingX request in {wait_time} seconds...")
+                time.sleep(wait_time)
+
+        logger.error(f"Failed to get data from BingX {endpoint} after {max_retries} attempts")
+        return None
+
+    def get_symbols(self):
+        """Get all USDT perpetual futures symbols from BingX"""
+        logger.info("Fetching all USDT perpetual futures symbols from BingX...")
+        # Endpoint based on common BingX API patterns for perpetual swap contracts
+        endpoint = "/openApi/swap/v2/quote/contracts"
+
+        data = self.make_request("GET", endpoint)
+
+        if not data:
+            logger.error("No data received from BingX get_symbols.")
+            return []
+
+        symbols = []
+        # Assuming data is a list of contract details directly if 'data' key holds the list
+        # Or it could be data.get('list') or similar, adjust based on actual response
+        contract_list = data if isinstance(data, list) else data.get('list', [])
+
+        for item in contract_list:
+            # Assuming fields: 'symbol', 'status', 'quoteCoin' or 'marginAsset'
+            # These field names are guesses and might need adjustment
+            if (item.get('quoteCoin') == 'USDT' or item.get('marginAsset') == 'USDT') and \
+               item.get('status') == 'Trading':
+                symbols.append(item['symbol']) # e.g., "BTC-USDT"
+
+        logger.info(f"Found {len(symbols)} active USDT futures symbols on BingX")
+        return symbols
+
+    def get_klines(self, symbol, interval='15m', limit=200):
+        """Get candlestick data from BingX"""
+        logger.debug(f"Fetching klines for {symbol} from BingX")
+        # Endpoint based on common BingX API patterns
+        endpoint = "/openApi/swap/v2/quote/klines"
+
+        # Map common interval to BingX format if necessary.
+        # For now, assume '15m' is accepted. BingX might use 'Min15', 'H1', etc.
+        # Example mapping: interval_map = {'15': 'Min15', '1h': 'H1'}
+        params = {
+            'symbol': symbol,
+            'interval': interval, # e.g., "15m", "1h", "4h", "1d"
+            'limit': limit
+        }
+
+        data = self.make_request("GET", endpoint, params=params)
+
+        if not data:
+            logger.warning(f"No kline data for {symbol} from BingX.")
+            return None
+
+        # Assuming data is a list of lists: [[ts, open, high, low, close, volume, ...], ...]
+        # And BingX returns newest first, so we might need to reverse.
+        # Or it might be oldest first. This needs to be checked with actual API response.
+        # For consistency with Bybit client, let's assume we want chronological (oldest first)
+
+        klines = []
+        # The actual data might be nested, e.g. data.get('list')
+        kline_list = data if isinstance(data, list) else data.get('list', [])
+
+        # If BingX returns newest first, reverse it:
+        # if kline_list and len(kline_list) > 1 and int(kline_list[0][0]) > int(kline_list[-1][0]):
+        #    kline_list.reverse()
+
+        for candle in kline_list:
+            if len(candle) >= 6: # Ensure we have enough data points
+                try:
+                    klines.append({
+                        'timestamp': int(candle[0]),       # Timestamp (ms)
+                        'open': float(candle[1]),         # Open
+                        'high': float(candle[2]),         # High
+                        'low': float(candle[3]),          # Low
+                        'close': float(candle[4]),        # Close
+                        'volume': float(candle[5])        # Volume
+                        # BingX might have 'turnover' or 'quoteAssetVolume' as candle[6] or candle[7]
+                    })
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error parsing kline candle for {symbol}: {candle} - {e}")
+            else:
+                logger.warning(f"Skipping malformed kline candle for {symbol}: {candle}")
+
+        # If data was newest first, and we didn't reverse above, do it now.
+        # Or, if data is oldest first, this is fine.
+        # Let's assume for now it's returned oldest first or the make_request sorts it.
+        # The Bybit client reverses if it gets newest first. We should aim for consistency.
+        # If BingX returns newest first, uncomment the reverse() above or do it here.
+        # Example: if klines and len(klines) > 1 and klines[0]['timestamp'] > klines[-1]['timestamp']:
+        #    klines.reverse()
+
         return klines
 
 class TechnicalIndicators:
@@ -1133,15 +1319,153 @@ class TelegramNotifier:
             logger.error(f"Error sending photo to Telegram: {e}")
             return False
 
+class TradeManager:
+    """Manages trading execution and position checking."""
+
+    def __init__(self, exchange_client, api_key=None, secret_key=None):
+        self.exchange_client = exchange_client
+        self.api_key = api_key
+        self.secret_key = secret_key
+        logger.info(f"TradeManager initialized with {self.exchange_client.__class__.__name__}.")
+
+    def check_open_positions(self, symbol):
+        """Placeholder for checking open positions for a given symbol."""
+        # In a real implementation, this would query the exchange API
+        # using self.exchange_client and potentially self.api_key/self.secret_key
+        logger.info(f"TradeManager: Checking open positions for {symbol} on {self.exchange_client.__class__.__name__}.")
+        # Example:
+        # positions = self.exchange_client.get_positions(symbol=symbol, api_key=self.api_key, secret_key=self.secret_key)
+        # return positions
+        return [] # Placeholder: No open positions
+
+    def execute_trade(self, symbol, signal_data, current_klines):
+        """Placeholder for executing a trade based on signal_data."""
+        # current_klines is passed for potential future use in more advanced execution logic
+        # (e.g., checking for immediate price changes, slippage, etc.)
+        logger.info(f"TradeManager: Received signal to {signal_data['signal']} {symbol} at {signal_data['current_price']:.4f} on {self.exchange_client.__class__.__name__}.")
+
+        # Example logic (all commented out as it's placeholder):
+        # if self.check_open_positions(symbol):
+        #     logger.info(f"TradeManager: Already have an open position for {symbol}. Skipping new trade.")
+        #     return False
+
+        # order_type = "LIMIT" # or "MARKET"
+        # quantity = self.calculate_position_size(signal_data['current_price'], signal_data['stop_loss'])
+
+        # if quantity <= 0:
+        #     logger.warning(f"TradeManager: Calculated quantity for {symbol} is zero or negative. Skipping trade.")
+        #     return False
+
+        # try:
+        #     trade_result = self.exchange_client.place_order(
+        #         symbol=symbol,
+        #         side=signal_data['signal'], # "BUY" or "SELL"
+        #         order_type=order_type,
+        #         qty=quantity,
+        #         price=signal_data['entry'], # For limit orders
+        #         stop_loss=signal_data['stop_loss'],
+        #         take_profit=signal_data['take_profit1'],
+        #         api_key=self.api_key,
+        #         secret_key=self.secret_key
+        #     )
+        #     if trade_result and trade_result.get('success'): # Structure depends on exchange client's response
+        #         logger.info(f"TradeManager: Successfully executed {signal_data['signal']} for {symbol} of {quantity} at {signal_data['entry']}.")
+        #         # Store trade details, send notification, etc.
+        #         return True
+        #     else:
+        #         logger.error(f"TradeManager: Failed to execute trade for {symbol}. Response: {trade_result}")
+        #         return False
+        # except Exception as e:
+        #     logger.error(f"TradeManager: Exception during trade execution for {symbol}: {e}")
+        #     return False
+
+        logger.info(f"TradeManager: Placeholder for {signal_data['signal']} {symbol}. No actual trade executed.")
+        return True # Placeholder: assume success for now
+
+    # def calculate_position_size(self, entry_price, stop_loss_price, risk_per_trade=0.01, account_balance=1000):
+    #     """Placeholder for calculating position size."""
+    #     # This is a very simplified example. Real position sizing is complex.
+    #     # risk_per_trade = 1% of account_balance
+    #     # account_balance would need to be fetched or configured
+    #     risk_amount = account_balance * risk_per_trade
+    #     price_difference = abs(entry_price - stop_loss_price)
+    #     if price_difference == 0:
+    #         return 0
+    #     position_size_in_asset = risk_amount / price_difference
+    #     # Convert to contract quantity if needed (e.g. for BTC, 1 contract might be 0.001 BTC)
+    #     # This depends on the exchange's contract specifications.
+    #     return position_size_in_asset
+
+
 class CryptoTradingBot:
     """Main trading bot class"""
     
     def __init__(self):
-        self.bybit = BybitClient()
-        self.strategy = TradingStrategy()
         self.telegram = TelegramNotifier(TELEGRAM_API_TOKEN, TELEGRAM_CHAT_ID)
         self.chart_generator = ChartGenerator()
+        self.strategy = TradingStrategy()
         self.symbols_queue = queue.Queue()
+
+        self.exchange_client = None
+        self.bingx_client = None
+        self.bybit_client = None
+        self.trade_manager = None # Initialize trade_manager attribute
+
+        logger.info("Initializing exchange clients...")
+
+        # Try BingX first
+        if BINGX_API_KEY:
+            try:
+                logger.info("Attempting to initialize BingX client...")
+                self.bingx_client = BingXClient(api_key=BINGX_API_KEY, secret_key=BINGX_SECRET_KEY)
+                # Perform a simple test call, e.g., get_symbols, to ensure it's working
+                # For now, we'll assume it initializes if keys are present.
+                # A proper test would involve making a lightweight API call here.
+                self.exchange_client = self.bingx_client
+                logger.info("Successfully initialized BingX client.")
+            except Exception as e:
+                logger.error(f"Failed to initialize BingX client: {e}")
+                self.bingx_client = None # Ensure it's None if failed
+
+        # Fallback to Bybit if BingX is not initialized
+        if not self.exchange_client:
+            try:
+                logger.info("Attempting to initialize Bybit client as fallback...")
+                self.bybit_client = BybitClient()
+                # BybitClient current public methods don't require keys, so it should generally init
+                self.exchange_client = self.bybit_client
+                logger.info("Successfully initialized Bybit client.")
+            except Exception as e:
+                logger.error(f"Failed to initialize Bybit client: {e}")
+                self.bybit_client = None # Ensure it's None if failed
+
+        if self.exchange_client:
+            if self.exchange_client == self.bingx_client:
+                logger.info("Active exchange client: BingX")
+                try:
+                    self.trade_manager = TradeManager(exchange_client=self.exchange_client,
+                                                      api_key=BINGX_API_KEY, secret_key=BINGX_SECRET_KEY)
+                    logger.info("TradeManager initialized for BingX client.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize TradeManager for BingX: {e}")
+                    self.trade_manager = None
+            elif self.exchange_client == self.bybit_client:
+                logger.info("Active exchange client: Bybit")
+                try:
+                    self.trade_manager = TradeManager(exchange_client=self.exchange_client,
+                                                      api_key=BYBIT_API_KEY, secret_key=BYBIT_SECRET_KEY)
+                    logger.info("TradeManager initialized for Bybit client.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize TradeManager for Bybit: {e}")
+                    self.trade_manager = None
+
+            if not self.trade_manager:
+                 logger.warning("TradeManager could not be initialized. Auto-trading features will be disabled.")
+
+        else:
+            logger.critical("CRITICAL: No exchange client could be initialized. Bot cannot fetch market data. TradeManager not initialized.")
+            # Depending on desired behavior, could raise an error or sys.exit here
+
         self.signals_sent = {}  # Track sent signals to avoid duplicates
         self.running = True
         self.threads = []
@@ -1150,6 +1474,10 @@ class CryptoTradingBot:
 
     def worker(self):
         """Worker thread to process symbols"""
+        if not self.exchange_client:
+            logger.error(f"[{threading.current_thread().name}] No exchange client available. Worker thread stopping.")
+            return
+
         while self.running:
             try:
                 # Get symbol from queue with timeout
@@ -1158,10 +1486,10 @@ class CryptoTradingBot:
                 except queue.Empty:
                     continue
 
-                logger.info(f"[{threading.current_thread().name}] Scanning {symbol}...")
+                logger.info(f"[{threading.current_thread().name}] Scanning {symbol} using {type(self.exchange_client).__name__}...")
 
                 # Get kline data
-                klines = self.bybit.get_klines(symbol)
+                klines = self.exchange_client.get_klines(symbol)
                 if not klines:
                     logger.warning(f"No kline data for {symbol}")
                     continue
@@ -1170,19 +1498,25 @@ class CryptoTradingBot:
                 signal_data = self.strategy.analyze(klines)
                 
                 if signal_data:
-                    # Use lock to prevent concurrent signal sending
+                    if self.trade_manager:
+                        logger.info(f"Handing off signal for {symbol} to TradeManager.")
+                        self.trade_manager.check_open_positions(symbol) # Placeholder call
+                        self.trade_manager.execute_trade(symbol, signal_data, current_klines=klines) # Placeholder call
+                    else:
+                        logger.warning("TradeManager not available, skipping trade execution logic.")
+
+                    # Notification logic (moved slightly to be after trade manager calls)
                     with self.signal_lock:
-                        # Check if we already sent this signal recently
                         signal_key = f"{symbol}_{signal_data['signal']}"
                         last_sent = self.signals_sent.get(signal_key, 0)
                         current_time = time.time()
                         
                         if current_time - last_sent > 3600:  # 1 hour cooldown
-                            logger.info(f"🚨 SIGNAL FOUND for {symbol}: {signal_data['signal']}")
-                            self.send_signal(symbol, signal_data)
+                            logger.info(f"🚨 NOTIFICATION for {symbol}: {signal_data['signal']}")
+                            self.send_signal(symbol, signal_data) # This method sends Telegram notification
                             self.signals_sent[signal_key] = current_time
                         else:
-                            logger.info(f"Signal for {symbol} already sent recently, skipping...")
+                            logger.info(f"Notification for {symbol} already sent recently, skipping...")
                 else:
                     logger.debug(f"No signal for {symbol}")
 
@@ -1274,12 +1608,26 @@ class CryptoTradingBot:
     def run(self):
         """Main bot loop"""
         logger.info("🚀 Starting Crypto Trading Bot...")
-        
+
+        if not self.exchange_client:
+            logger.critical("No exchange client initialized at startup. Bot cannot run scan cycles.")
+            self.telegram.send_message("⚠️ Bot Error: No exchange client initialized. Cannot fetch data. Please check configuration and API keys.")
+            return # Exit run method if no client
+
         # Send startup message
-        self.telegram.send_message("🤖 Crypto Trading Bot Started!\n\n✅ Advanced entry fine-tuning enabled\n✅ Multi-indicator confirmation\n✅ Dynamic risk management\n✅ Enhanced signal explanations\n\nScanning Bybit USDT futures for high-probability setups...")
+        startup_message = (
+            "🤖 Crypto Trading Bot Started!\n\n"
+            f"✅ Active Exchange: {type(self.exchange_client).__name__}\n"
+            "✅ Advanced entry fine-tuning enabled\n"
+            "✅ Multi-indicator confirmation\n"
+            "✅ Dynamic risk management\n"
+            "✅ Enhanced signal explanations\n\n"
+            f"Scanning {type(self.exchange_client).__name__} USDT futures for high-probability setups..."
+        )
+        self.telegram.send_message(startup_message)
 
         # Start worker threads
-        logger.info(f"Starting {self.num_workers} worker threads...")
+        logger.info(f"Starting {self.num_workers} worker threads for {type(self.exchange_client).__name__}...")
         for i in range(self.num_workers):
             thread = threading.Thread(target=self.worker, name=f"Worker-{i+1}")
             thread.daemon = True
@@ -1293,10 +1641,15 @@ class CryptoTradingBot:
                 logger.info("=" * 50)
                 logger.info("Starting new scan cycle...")
 
+                if not self.exchange_client:
+                    logger.critical("No exchange client available. Cannot proceed with scan cycle.")
+                    time.sleep(60) # Wait before retrying or exiting
+                    continue
+
                 # Get all symbols
-                symbols = self.bybit.get_symbols()
-                if not symbols:
-                    logger.error("Failed to get symbols, waiting before retry...")
+                symbols = self.exchange_client.get_symbols()
+                if not symbols: # Handles None or empty list
+                    logger.error(f"Failed to get symbols from {type(self.exchange_client).__name__}, waiting before retry...")
                     time.sleep(60)
                     continue
 
