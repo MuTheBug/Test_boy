@@ -1,15 +1,21 @@
 """
-HYPER SCALPER STRATEGY v4
-TREND FOLLOWING PULLBACK - High Win Rate Edition
+HYPER SCALPER STRATEGY v5
+TREND FOLLOWING PULLBACK + TRAILING STOP
 
-CORE PRINCIPLE: NEVER fight the trend. Only enter on pullbacks WITH the trend.
+CORE PRINCIPLE: NEVER fight the trend. Let winners run with trailing stop.
 
 Key Rules:
 1. Identify CLEAR trend using 200 EMA slope
 2. Wait for pullback to key EMA (21 or 50)
 3. Require STRONG reversal candle (engulfing/pin bar)
-4. Wide stops (2x ATR) with 3:1 reward ratio
-5. Maximum 2 trades per day - QUALITY over quantity
+4. Wide stops (2x ATR) with 4:1 reward ratio
+5. TRAILING STOP: Lock in profits as trade moves in your favor
+6. Maximum 2 trades per day - QUALITY over quantity
+
+Trailing Stop Logic:
+- At 2x ATR profit: Move stop to breakeven
+- At 3x ATR profit: Trail stop at 1.5x ATR behind price
+- At 4x ATR profit: Trail stop at 1x ATR behind price (tight trail)
 """
 
 import logging
@@ -39,14 +45,15 @@ class ScalpTrade:
 
 class HyperScalper:
     """
-    Trend Following Pullback Strategy v4
+    Trend Following Pullback Strategy v5
 
     Philosophy:
     - The trend is your friend - NEVER fight it
     - Pullbacks in trends offer low-risk entries
     - Strong reversal candles confirm the pullback is over
     - Wide stops prevent getting stopped out by noise
-    - High reward ratio (3:1) means we only need 30% win rate to profit
+    - High reward ratio (4:1) means we only need 25% win rate to profit
+    - TRAILING STOP lets winners run even further
 
     Entry Criteria (ALL must be met):
     1. Clear trend (200 EMA slope)
@@ -68,7 +75,12 @@ class HyperScalper:
         # ATR for stops
         self.atr_period = 14
         self.atr_stop_mult = 2.0   # Wide stop: 2x ATR
-        self.atr_tp_mult = 6.0     # Target: 6x ATR (3:1 RR)
+        self.atr_tp_mult = 8.0     # Target: 8x ATR (4:1 RR)
+
+        # Trailing stop levels (in ATR multiples)
+        self.trail_breakeven = 2.0   # Move to breakeven at 2x ATR profit
+        self.trail_level1 = 3.0      # At 3x ATR profit, trail at 1.5x ATR
+        self.trail_level2 = 4.0      # At 4x ATR profit, trail at 1x ATR (tight)
 
         # Minimum trend slope (% per 20 periods)
         self.min_trend_slope = 0.5
@@ -339,7 +351,7 @@ class HyperScalper:
 
 
 class QuickBacktest:
-    """Fast backtester for the scalping strategy"""
+    """Fast backtester with trailing stop support"""
 
     def __init__(self, initial_balance: float = 5.0):
         self.initial_balance = initial_balance
@@ -350,8 +362,52 @@ class QuickBacktest:
         self.risk_per_trade = 0.10  # 10% of account per trade
         self.fee_pct = 0.04  # 0.04% taker fee
 
+    def calculate_trailing_stop(self, entry: float, current_price: float,
+                                 atr: float, is_long: bool, initial_stop: float) -> float:
+        """
+        Calculate trailing stop based on profit level
+
+        Trailing Logic:
+        - At 2x ATR profit: Move stop to breakeven
+        - At 3x ATR profit: Trail at 1.5x ATR behind price
+        - At 4x ATR profit: Trail at 1x ATR behind price (tight)
+        """
+        if is_long:
+            profit_atr = (current_price - entry) / atr
+
+            if profit_atr >= 4.0:
+                # Tight trail at 1x ATR
+                new_stop = current_price - (atr * 1.0)
+            elif profit_atr >= 3.0:
+                # Trail at 1.5x ATR
+                new_stop = current_price - (atr * 1.5)
+            elif profit_atr >= 2.0:
+                # Move to breakeven
+                new_stop = entry
+            else:
+                # Keep initial stop
+                new_stop = initial_stop
+
+            # Never move stop backwards
+            return max(new_stop, initial_stop)
+        else:
+            # SHORT position
+            profit_atr = (entry - current_price) / atr
+
+            if profit_atr >= 4.0:
+                new_stop = current_price + (atr * 1.0)
+            elif profit_atr >= 3.0:
+                new_stop = current_price + (atr * 1.5)
+            elif profit_atr >= 2.0:
+                new_stop = entry
+            else:
+                new_stop = initial_stop
+
+            # Never move stop backwards (for short, lower is better)
+            return min(new_stop, initial_stop)
+
     def run(self, klines: List[Dict]) -> Dict:
-        """Run backtest and return results"""
+        """Run backtest with trailing stop"""
         if len(klines) < 250:
             return {"error": "Need at least 250 candles for 200 EMA"}
 
@@ -365,51 +421,77 @@ class QuickBacktest:
         total_pnl = 0
 
         # Track daily trades
-        last_trade_candle = -100  # Minimum candles between trades
+        last_trade_candle = -100
 
         # Walk through data
         i = 220
         while i < len(klines) - 1:
-            # Minimum gap between trades (quality over quantity)
             if i - last_trade_candle < 10:
                 i += 1
                 continue
 
-            # Get historical slice
             history = klines[max(0, i-250):i+1]
-
-            # Get signal
             trade = self.strategy.analyze(history)
 
             if trade and trade.signal != ScalpSignal.NONE:
-                # Calculate position size
                 position_value = balance * self.risk_per_trade * self.leverage
                 qty = position_value / trade.entry
 
                 entry_price = trade.entry
-                stop = trade.stop_loss
+                initial_stop = trade.stop_loss
+                current_stop = initial_stop
                 tp = trade.take_profit
 
-                # Check next candles for exit (max 50 candles hold for trend trades)
-                for j in range(i + 1, min(i + 50, len(klines))):
+                # Calculate ATR for trailing stop
+                closes = [k['close'] for k in history]
+                highs = [k['high'] for k in history]
+                lows = [k['low'] for k in history]
+                atr_values = self.strategy.atr(highs, lows, closes, 14)
+                curr_atr = atr_values[-1] if atr_values[-1] else (trade.entry * 0.02)
+
+                is_long = trade.signal == ScalpSignal.LONG
+                max_price = entry_price  # Track best price for trailing
+                exit_reason = ""
+
+                # Check next candles for exit (max 80 candles for 4:1 RR)
+                for j in range(i + 1, min(i + 80, len(klines))):
                     candle = klines[j]
                     high = candle['high']
                     low = candle['low']
+                    close = candle['close']
 
-                    if trade.signal == ScalpSignal.LONG:
-                        if low <= stop:
-                            pnl = (stop - entry_price) * qty
+                    if is_long:
+                        # Update max price and trailing stop
+                        if high > max_price:
+                            max_price = high
+                            current_stop = self.calculate_trailing_stop(
+                                entry_price, max_price, curr_atr, True, initial_stop
+                            )
+
+                        # Check stop loss (including trailing)
+                        if low <= current_stop:
+                            exit_price = current_stop
+                            pnl = (exit_price - entry_price) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
                             balance += pnl
                             total_pnl += pnl
-                            losses += 1
+
+                            if pnl > 0:
+                                wins += 1
+                                exit_reason = 'TRAIL_STOP'
+                            else:
+                                losses += 1
+                                exit_reason = 'STOP'
+
                             trades.append({
                                 'side': 'LONG', 'entry': entry_price,
-                                'exit': stop, 'pnl': pnl, 'result': 'STOP'
+                                'exit': exit_price, 'pnl': pnl, 'result': exit_reason
                             })
                             last_trade_candle = j
                             i = j
                             break
+
+                        # Check take profit
                         if high >= tp:
                             pnl = (tp - entry_price) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -423,20 +505,39 @@ class QuickBacktest:
                             last_trade_candle = j
                             i = j
                             break
+
                     else:  # SHORT
-                        if high >= stop:
-                            pnl = (entry_price - stop) * qty
+                        # Update max price (min for short) and trailing stop
+                        if low < max_price:
+                            max_price = low
+                            current_stop = self.calculate_trailing_stop(
+                                entry_price, max_price, curr_atr, False, initial_stop
+                            )
+
+                        # Check stop loss (including trailing)
+                        if high >= current_stop:
+                            exit_price = current_stop
+                            pnl = (entry_price - exit_price) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
                             balance += pnl
                             total_pnl += pnl
-                            losses += 1
+
+                            if pnl > 0:
+                                wins += 1
+                                exit_reason = 'TRAIL_STOP'
+                            else:
+                                losses += 1
+                                exit_reason = 'STOP'
+
                             trades.append({
                                 'side': 'SHORT', 'entry': entry_price,
-                                'exit': stop, 'pnl': pnl, 'result': 'STOP'
+                                'exit': exit_price, 'pnl': pnl, 'result': exit_reason
                             })
                             last_trade_candle = j
                             i = j
                             break
+
+                        # Check take profit
                         if low <= tp:
                             pnl = (entry_price - tp) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -452,8 +553,8 @@ class QuickBacktest:
                             break
                 else:
                     # Timeout - close at current price
-                    close_price = klines[min(i + 50, len(klines) - 1)]['close']
-                    if trade.signal == ScalpSignal.LONG:
+                    close_price = klines[min(i + 80, len(klines) - 1)]['close']
+                    if is_long:
                         pnl = (close_price - entry_price) * qty
                     else:
                         pnl = (entry_price - close_price) * qty
@@ -468,10 +569,9 @@ class QuickBacktest:
                         'side': trade.signal.value, 'entry': entry_price,
                         'exit': close_price, 'pnl': pnl, 'result': 'TIMEOUT'
                     })
-                    last_trade_candle = min(i + 50, len(klines) - 1)
+                    last_trade_candle = min(i + 80, len(klines) - 1)
                     i = last_trade_candle
 
-                # Track drawdown
                 if balance > peak:
                     peak = balance
                 dd = (peak - balance) / peak * 100
@@ -509,9 +609,10 @@ def test_hyper_scalper(symbol: str = "BTCUSDT", balance: float = 5.0, interval: 
     client = BinanceFuturesClient(config.api)
 
     print(f"\n{'='*60}")
-    print(f"  TREND FOLLOWING PULLBACK v4 - {symbol}")
+    print(f"  TREND FOLLOWING v5 + TRAILING STOP - {symbol}")
     print(f"  Initial Balance: ${balance:.2f}")
     print(f"  Timeframe: {interval}")
+    print(f"  Features: 4:1 RR + Trailing Stop")
     print(f"{'='*60}\n")
 
     print(f"Fetching {interval} candles...")
