@@ -353,6 +353,7 @@ class TradingBot:
             primary_tf = self.config.strategy.primary_timeframe
             klines = self.client.get_klines(symbol, primary_tf, 200)
             if not klines:
+                logger.warning(f"{symbol}: Failed to fetch klines")
                 return
 
             klines_dict[primary_tf] = klines
@@ -367,7 +368,12 @@ class TradingBot:
             signal = self.strategy.analyze_multi_timeframe(symbol, klines_dict)
 
             if signal:
+                logger.info(f"📊 SIGNAL FOUND: {symbol} {signal.signal_type.value} | Strength: {signal.strength}/10")
                 self._process_signal(signal)
+            else:
+                # Log current price for visibility
+                current_price = klines[-1]['close']
+                logger.info(f"📈 {symbol}: ${current_price:.2f} - No signal (waiting for setup)")
 
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
