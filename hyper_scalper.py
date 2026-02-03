@@ -1,13 +1,12 @@
 """
-HYPER SCALPER STRATEGY
-Aggressive high-frequency strategy for rapid small account growth
+HYPER SCALPER STRATEGY v2
+Conservative momentum strategy - Quality over Quantity
 
-Designed for:
-- Small accounts ($5-100)
-- High win rate (65%+)
-- Quick profits, tight stops
-- Multiple trades per day
-- Compound growth focus
+Key Changes:
+- Only trade STRONG trends (not ranging)
+- Wait for pullback + confirmation candle
+- Higher win rate target (60%+)
+- Fewer but better trades
 """
 
 import logging
@@ -37,150 +36,134 @@ class ScalpTrade:
 
 class HyperScalper:
     """
-    Aggressive Scalping Strategy for Small Account Growth
+    Conservative Momentum Scalper v2
 
-    Core Principles:
-    1. Trade WITH momentum (not against it)
-    2. Quick entries on pullbacks in strong moves
-    3. Tight stops (0.3-0.5%)
-    4. Quick take profits (0.5-1%)
-    5. High frequency = compound growth
-
-    Indicators Used:
-    - EMA 8/21 for trend
-    - RSI 7 for momentum
-    - Volume spike detection
-    - Candle patterns (engulfing, pin bars)
+    Only trades when:
+    1. Strong trend (EMA alignment + momentum)
+    2. Pullback occurred (price retraced to EMA)
+    3. Confirmation candle (reversal pattern)
+    4. Volume supports the move
     """
 
     def __init__(self):
-        # EMA settings
-        self.ema_fast = 8
-        self.ema_slow = 21
+        # Trend EMAs
+        self.ema_fast = 9
+        self.ema_mid = 21
+        self.ema_slow = 55
 
-        # RSI settings
-        self.rsi_period = 7
-        self.rsi_ob = 75  # Overbought
-        self.rsi_os = 25  # Oversold
+        # RSI
+        self.rsi_period = 14
 
-        # Risk settings (tight for scalping)
-        self.stop_pct = 0.4  # 0.4% stop loss
-        self.tp_pct = 0.8    # 0.8% take profit (2:1 RR)
+        # Risk settings
+        self.stop_pct = 0.6   # 0.6% stop loss
+        self.tp_pct = 1.2     # 1.2% take profit (2:1 RR)
 
-        # Signal thresholds
-        self.min_strength = 3
-        self.volume_spike = 1.5  # 1.5x average volume
+        # Minimum score to trade
+        self.min_strength = 5  # Need 5+ points (stricter)
 
     def ema(self, data: List[float], period: int) -> List[float]:
-        """Calculate EMA"""
         if len(data) < period:
             return [None] * len(data)
-
         mult = 2 / (period + 1)
         result = [None] * (period - 1)
         result.append(sum(data[:period]) / period)
-
         for i in range(period, len(data)):
             result.append((data[i] - result[-1]) * mult + result[-1])
         return result
 
-    def rsi(self, data: List[float], period: int = 7) -> List[float]:
-        """Calculate RSI"""
+    def sma(self, data: List[float], period: int) -> List[float]:
+        if len(data) < period:
+            return [None] * len(data)
+        result = [None] * (period - 1)
+        for i in range(period - 1, len(data)):
+            result.append(sum(data[i - period + 1:i + 1]) / period)
+        return result
+
+    def rsi(self, data: List[float], period: int = 14) -> List[float]:
         if len(data) < period + 1:
             return [None] * len(data)
-
         gains, losses = [], []
         for i in range(1, len(data)):
             diff = data[i] - data[i-1]
             gains.append(max(diff, 0))
             losses.append(abs(min(diff, 0)))
-
         result = [None] * period
         avg_gain = sum(gains[:period]) / period
         avg_loss = sum(losses[:period]) / period
-
         for i in range(period, len(gains)):
             avg_gain = (avg_gain * (period - 1) + gains[i]) / period
             avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
             if avg_loss == 0:
                 result.append(100)
             else:
                 result.append(100 - (100 / (1 + avg_gain / avg_loss)))
+        return [None] + result
+
+    def atr(self, highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> List[float]:
+        """Average True Range"""
+        if len(closes) < period + 1:
+            return [None] * len(closes)
+
+        trs = []
+        for i in range(1, len(closes)):
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i-1]),
+                abs(lows[i] - closes[i-1])
+            )
+            trs.append(tr)
+
+        result = [None] * period
+        result.append(sum(trs[:period]) / period)
+
+        for i in range(period, len(trs)):
+            result.append((result[-1] * (period - 1) + trs[i]) / period)
 
         return [None] + result
 
-    def detect_candle_pattern(self, opens: List[float], highs: List[float],
-                               lows: List[float], closes: List[float]) -> Tuple[str, int]:
-        """
-        Detect bullish/bearish candle patterns
-        Returns (pattern_name, direction) where direction is 1 for bullish, -1 for bearish
-        """
-        if len(closes) < 3:
-            return ("none", 0)
+    def is_bullish_candle(self, o, h, l, c) -> bool:
+        """Check if candle is bullish with good body"""
+        body = c - o
+        range_hl = h - l
+        if range_hl == 0:
+            return False
+        return body > 0 and body / range_hl > 0.5
 
-        # Current and previous candles
-        o1, h1, l1, c1 = opens[-1], highs[-1], lows[-1], closes[-1]
-        o2, h2, l2, c2 = opens[-2], highs[-2], lows[-2], closes[-2]
+    def is_bearish_candle(self, o, h, l, c) -> bool:
+        """Check if candle is bearish with good body"""
+        body = o - c
+        range_hl = h - l
+        if range_hl == 0:
+            return False
+        return body > 0 and body / range_hl > 0.5
 
-        body1 = abs(c1 - o1)
-        body2 = abs(c2 - o2)
-        range1 = h1 - l1
-        range2 = h2 - l2
+    def is_hammer(self, o, h, l, c) -> bool:
+        """Bullish reversal pattern"""
+        body = abs(c - o)
+        range_hl = h - l
+        if range_hl == 0 or body == 0:
+            return False
+        lower_wick = min(o, c) - l
+        upper_wick = h - max(o, c)
+        return lower_wick > body * 2 and upper_wick < body * 0.5
 
-        # Bullish Engulfing
-        if c2 < o2 and c1 > o1 and o1 <= c2 and c1 >= o2 and body1 > body2:
-            return ("bullish_engulfing", 1)
-
-        # Bearish Engulfing
-        if c2 > o2 and c1 < o1 and o1 >= c2 and c1 <= o2 and body1 > body2:
-            return ("bearish_engulfing", -1)
-
-        # Bullish Pin Bar (Hammer)
-        if range1 > 0:
-            lower_wick = min(o1, c1) - l1
-            upper_wick = h1 - max(o1, c1)
-            if lower_wick > body1 * 2 and upper_wick < body1 * 0.5:
-                return ("hammer", 1)
-
-        # Bearish Pin Bar (Shooting Star)
-        if range1 > 0:
-            lower_wick = min(o1, c1) - l1
-            upper_wick = h1 - max(o1, c1)
-            if upper_wick > body1 * 2 and lower_wick < body1 * 0.5:
-                return ("shooting_star", -1)
-
-        # Strong Momentum Candle (large body, small wicks)
-        if range1 > 0 and body1 / range1 > 0.7:
-            if c1 > o1:
-                return ("momentum_bull", 1)
-            else:
-                return ("momentum_bear", -1)
-
-        return ("none", 0)
+    def is_shooting_star(self, o, h, l, c) -> bool:
+        """Bearish reversal pattern"""
+        body = abs(c - o)
+        range_hl = h - l
+        if range_hl == 0 or body == 0:
+            return False
+        lower_wick = min(o, c) - l
+        upper_wick = h - max(o, c)
+        return upper_wick > body * 2 and lower_wick < body * 0.5
 
     def analyze(self, klines: List[Dict]) -> Optional[ScalpTrade]:
         """
-        Main analysis - generates scalp signal
-
-        Entry Conditions for LONG:
-        1. Price above EMA 21 (trend filter)
-        2. EMA 8 > EMA 21 (momentum)
-        3. RSI < 70 (not overbought)
-        4. Pullback to EMA 8 OR bullish candle pattern
-        5. Volume confirmation
-
-        Entry Conditions for SHORT:
-        1. Price below EMA 21 (trend filter)
-        2. EMA 8 < EMA 21 (momentum)
-        3. RSI > 30 (not oversold)
-        4. Rally to EMA 8 OR bearish candle pattern
-        5. Volume confirmation
+        Conservative analysis - only strong setups
         """
-        if len(klines) < 50:
+        if len(klines) < 60:
             return None
 
-        # Extract data
         closes = [k['close'] for k in klines]
         opens = [k['open'] for k in klines]
         highs = [k['high'] for k in klines]
@@ -188,115 +171,126 @@ class HyperScalper:
         volumes = [k['volume'] for k in klines]
 
         # Calculate indicators
-        ema8 = self.ema(closes, self.ema_fast)
-        ema21 = self.ema(closes, self.ema_slow)
+        ema9 = self.ema(closes, self.ema_fast)
+        ema21 = self.ema(closes, self.ema_mid)
+        ema55 = self.ema(closes, self.ema_slow)
         rsi = self.rsi(closes, self.rsi_period)
+        atr = self.atr(highs, lows, closes, 14)
 
         # Current values
         price = closes[-1]
-        curr_ema8 = ema8[-1]
-        curr_ema21 = ema21[-1]
+        e9, e21, e55 = ema9[-1], ema21[-1], ema55[-1]
         curr_rsi = rsi[-1]
-        prev_rsi = rsi[-2] if len(rsi) > 1 else None
+        prev_rsi = rsi[-2] if rsi[-2] else 50
+        curr_atr = atr[-1]
 
-        if None in [curr_ema8, curr_ema21, curr_rsi]:
+        if None in [e9, e21, e55, curr_rsi, curr_atr]:
             return None
 
+        # Current candle
+        o, h, l, c = opens[-1], highs[-1], lows[-1], closes[-1]
+        prev_o, prev_h, prev_l, prev_c = opens[-2], highs[-2], lows[-2], closes[-2]
+
         # Volume analysis
-        avg_volume = sum(volumes[-20:]) / 20
-        curr_volume = volumes[-1]
-        volume_spike = curr_volume > avg_volume * self.volume_spike
+        avg_vol = sum(volumes[-20:]) / 20
+        curr_vol = volumes[-1]
+        high_volume = curr_vol > avg_vol * 1.3
 
-        # Candle pattern
-        pattern, direction = self.detect_candle_pattern(opens, highs, lows, closes)
-
-        # Calculate strength score
+        # ===== DETECT TREND STRENGTH =====
         strength = 0
         reasons = []
         signal = ScalpSignal.NONE
 
-        # ===== LONG SETUP =====
-        if curr_ema8 > curr_ema21:  # Uptrend
-            strength += 1
-            reasons.append("EMA8 > EMA21 (uptrend)")
+        # STRONG UPTREND CHECK
+        uptrend = e9 > e21 > e55
+        downtrend = e9 < e21 < e55
 
-            # Price above EMA21
-            if price > curr_ema21:
-                strength += 1
-                reasons.append("Price above EMA21")
+        if uptrend:
+            strength += 2
+            reasons.append("Strong uptrend (EMA9>21>55)")
 
-            # RSI not overbought
-            if curr_rsi < self.rsi_ob:
-                strength += 1
-                reasons.append(f"RSI {curr_rsi:.0f} not overbought")
+            # Price pulled back to EMA9 or EMA21
+            near_ema9 = abs(price - e9) / price < 0.003
+            near_ema21 = abs(price - e21) / price < 0.005
+            touched_ema = l <= e9 * 1.002 or l <= e21 * 1.002
 
-            # RSI rising
-            if prev_rsi and curr_rsi > prev_rsi:
-                strength += 1
-                reasons.append("RSI rising")
-
-            # Pullback to EMA8 (within 0.3%)
-            if abs(price - curr_ema8) / price < 0.003:
+            if near_ema9 or touched_ema:
                 strength += 2
-                reasons.append("Pullback to EMA8")
-
-            # Bullish candle pattern
-            if direction == 1:
-                strength += 2
-                reasons.append(f"Pattern: {pattern}")
-
-            # Volume spike
-            if volume_spike:
+                reasons.append("Pullback to EMA9")
+            elif near_ema21:
                 strength += 1
-                reasons.append("Volume spike")
+                reasons.append("Pullback to EMA21")
 
-            # RSI oversold bounce
-            if curr_rsi < 35 and prev_rsi and curr_rsi > prev_rsi:
+            # RSI not overbought and turning up
+            if 40 < curr_rsi < 65:
+                strength += 1
+                reasons.append(f"RSI healthy ({curr_rsi:.0f})")
+            if curr_rsi > prev_rsi and curr_rsi < 70:
+                strength += 1
+                reasons.append("RSI turning up")
+
+            # Bullish confirmation candle
+            if self.is_bullish_candle(o, h, l, c):
+                strength += 1
+                reasons.append("Bullish candle")
+            if self.is_hammer(prev_o, prev_h, prev_l, prev_c):
                 strength += 2
-                reasons.append("RSI oversold bounce")
+                reasons.append("Hammer pattern")
+
+            # Volume confirmation
+            if high_volume and c > o:
+                strength += 1
+                reasons.append("High volume buying")
+
+            # Price above all EMAs
+            if price > e9 and price > e21:
+                strength += 1
+                reasons.append("Price above EMAs")
 
             if strength >= self.min_strength:
                 signal = ScalpSignal.LONG
 
-        # ===== SHORT SETUP =====
-        elif curr_ema8 < curr_ema21:  # Downtrend
-            strength += 1
-            reasons.append("EMA8 < EMA21 (downtrend)")
+        elif downtrend:
+            strength += 2
+            reasons.append("Strong downtrend (EMA9<21<55)")
 
-            # Price below EMA21
-            if price < curr_ema21:
-                strength += 1
-                reasons.append("Price below EMA21")
+            # Price rallied to EMA9 or EMA21
+            near_ema9 = abs(price - e9) / price < 0.003
+            near_ema21 = abs(price - e21) / price < 0.005
+            touched_ema = h >= e9 * 0.998 or h >= e21 * 0.998
 
-            # RSI not oversold
-            if curr_rsi > self.rsi_os:
-                strength += 1
-                reasons.append(f"RSI {curr_rsi:.0f} not oversold")
-
-            # RSI falling
-            if prev_rsi and curr_rsi < prev_rsi:
-                strength += 1
-                reasons.append("RSI falling")
-
-            # Rally to EMA8 (within 0.3%)
-            if abs(price - curr_ema8) / price < 0.003:
+            if near_ema9 or touched_ema:
                 strength += 2
-                reasons.append("Rally to EMA8")
-
-            # Bearish candle pattern
-            if direction == -1:
-                strength += 2
-                reasons.append(f"Pattern: {pattern}")
-
-            # Volume spike
-            if volume_spike:
+                reasons.append("Rally to EMA9")
+            elif near_ema21:
                 strength += 1
-                reasons.append("Volume spike")
+                reasons.append("Rally to EMA21")
 
-            # RSI overbought rejection
-            if curr_rsi > 65 and prev_rsi and curr_rsi < prev_rsi:
+            # RSI not oversold and turning down
+            if 35 < curr_rsi < 60:
+                strength += 1
+                reasons.append(f"RSI healthy ({curr_rsi:.0f})")
+            if curr_rsi < prev_rsi and curr_rsi > 30:
+                strength += 1
+                reasons.append("RSI turning down")
+
+            # Bearish confirmation candle
+            if self.is_bearish_candle(o, h, l, c):
+                strength += 1
+                reasons.append("Bearish candle")
+            if self.is_shooting_star(prev_o, prev_h, prev_l, prev_c):
                 strength += 2
-                reasons.append("RSI overbought rejection")
+                reasons.append("Shooting star pattern")
+
+            # Volume confirmation
+            if high_volume and c < o:
+                strength += 1
+                reasons.append("High volume selling")
+
+            # Price below all EMAs
+            if price < e9 and price < e21:
+                strength += 1
+                reasons.append("Price below EMAs")
 
             if strength >= self.min_strength:
                 signal = ScalpSignal.SHORT
@@ -304,20 +298,20 @@ class HyperScalper:
         if signal == ScalpSignal.NONE:
             return None
 
-        # Calculate entry, stop, take profit
-        entry = price
+        # Calculate stops based on ATR
+        atr_mult = 1.5
 
         if signal == ScalpSignal.LONG:
-            stop_loss = entry * (1 - self.stop_pct / 100)
-            take_profit = entry * (1 + self.tp_pct / 100)
+            stop_loss = price - (curr_atr * atr_mult)
+            take_profit = price + (curr_atr * atr_mult * 2)  # 2:1 RR
         else:
-            stop_loss = entry * (1 + self.stop_pct / 100)
-            take_profit = entry * (1 - self.tp_pct / 100)
+            stop_loss = price + (curr_atr * atr_mult)
+            take_profit = price - (curr_atr * atr_mult * 2)
 
         return ScalpTrade(
             signal=signal,
             symbol=klines[-1].get('symbol', 'UNKNOWN'),
-            entry=entry,
+            entry=price,
             stop_loss=stop_loss,
             take_profit=take_profit,
             strength=strength,
