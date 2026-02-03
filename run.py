@@ -176,7 +176,7 @@ Environment Variables:
         backtester = Backtester(initial_balance=10000.0)
 
         if args.multi_backtest:
-            symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+            symbols = ['BTCUSDT', 'ETHUSDT']  # Only profitable pairs
             backtester.run_multi_symbol_backtest(symbols, '15m', args.candles)
         else:
             result = backtester.run_backtest(args.symbol, '15m', args.candles)
