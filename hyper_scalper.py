@@ -1,13 +1,15 @@
 """
-HYPER SCALPER STRATEGY v3
-High Win Rate Mean Reversion + Momentum Combo
+HYPER SCALPER STRATEGY v4
+TREND FOLLOWING PULLBACK - High Win Rate Edition
 
-Key Principles:
-1. Trade at extremes (Bollinger Band touches)
-2. With trend confirmation (200 EMA)
-3. RSI divergence for high-probability reversals
-4. Multiple confluence = higher win rate
-5. Strict entry criteria = quality over quantity
+CORE PRINCIPLE: NEVER fight the trend. Only enter on pullbacks WITH the trend.
+
+Key Rules:
+1. Identify CLEAR trend using 200 EMA slope
+2. Wait for pullback to key EMA (21 or 50)
+3. Require STRONG reversal candle (engulfing/pin bar)
+4. Wide stops (2x ATR) with 3:1 reward ratio
+5. Maximum 2 trades per day - QUALITY over quantity
 """
 
 import logging
@@ -37,34 +39,39 @@ class ScalpTrade:
 
 class HyperScalper:
     """
-    High Win Rate Scalper v3
+    Trend Following Pullback Strategy v4
 
-    Combines:
-    1. Bollinger Band bounces (mean reversion at extremes)
-    2. RSI divergence (strongest reversal signal)
-    3. Trend alignment (200 EMA filter)
-    4. Volume confirmation
-    5. Candlestick patterns
+    Philosophy:
+    - The trend is your friend - NEVER fight it
+    - Pullbacks in trends offer low-risk entries
+    - Strong reversal candles confirm the pullback is over
+    - Wide stops prevent getting stopped out by noise
+    - High reward ratio (3:1) means we only need 30% win rate to profit
 
-    Only takes trades with 6+ confluence points
+    Entry Criteria (ALL must be met):
+    1. Clear trend (200 EMA slope)
+    2. Price pulled back to 21 or 50 EMA
+    3. RSI in neutral zone (35-65) - not overbought/oversold
+    4. Strong reversal candle pattern
+    5. Volume above average
     """
 
     def __init__(self):
-        # Trend EMAs
-        self.ema_fast = 9
-        self.ema_mid = 21
+        # EMAs
+        self.ema_fast = 21
         self.ema_slow = 50
-        self.ema_trend = 200  # Main trend filter
+        self.ema_trend = 200
 
         # RSI
         self.rsi_period = 14
 
-        # Bollinger Bands
-        self.bb_period = 20
-        self.bb_std = 2.0
+        # ATR for stops
+        self.atr_period = 14
+        self.atr_stop_mult = 2.0   # Wide stop: 2x ATR
+        self.atr_tp_mult = 6.0     # Target: 6x ATR (3:1 RR)
 
-        # Minimum score to trade (STRICT)
-        self.min_strength = 6  # Need 6+ points for high win rate
+        # Minimum trend slope (% per 20 periods)
+        self.min_trend_slope = 0.5
 
     def ema(self, data: List[float], period: int) -> List[float]:
         if len(data) < period:
@@ -105,10 +112,8 @@ class HyperScalper:
         return [None] + result
 
     def atr(self, highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> List[float]:
-        """Average True Range"""
         if len(closes) < period + 1:
             return [None] * len(closes)
-
         trs = []
         for i in range(1, len(closes)):
             tr = max(
@@ -117,126 +122,81 @@ class HyperScalper:
                 abs(lows[i] - closes[i-1])
             )
             trs.append(tr)
-
         result = [None] * period
         result.append(sum(trs[:period]) / period)
-
         for i in range(period, len(trs)):
             result.append((result[-1] * (period - 1) + trs[i]) / period)
-
         return [None] + result
 
-    def bollinger_bands(self, data: List[float], period: int = 20, std_dev: float = 2.0) -> Tuple[List[float], List[float], List[float]]:
-        """Calculate Bollinger Bands - returns (upper, middle, lower)"""
-        if len(data) < period:
-            return [None] * len(data), [None] * len(data), [None] * len(data)
+    def get_trend_slope(self, ema_values: List[float], lookback: int = 20) -> float:
+        """Calculate EMA slope as percentage change over lookback periods"""
+        valid = [v for v in ema_values[-lookback:] if v is not None]
+        if len(valid) < lookback:
+            return 0
+        return (valid[-1] - valid[0]) / valid[0] * 100
 
-        upper = [None] * (period - 1)
-        middle = [None] * (period - 1)
-        lower = [None] * (period - 1)
-
-        for i in range(period - 1, len(data)):
-            window = data[i - period + 1:i + 1]
-            sma = sum(window) / period
-            variance = sum((x - sma) ** 2 for x in window) / period
-            std = variance ** 0.5
-
-            middle.append(sma)
-            upper.append(sma + std_dev * std)
-            lower.append(sma - std_dev * std)
-
-        return upper, middle, lower
-
-    def detect_divergence(self, prices: List[float], rsi: List[float], lookback: int = 10) -> str:
-        """
-        Detect RSI divergence - one of the most reliable reversal signals
-
-        Returns: 'bullish', 'bearish', or 'none'
-        """
-        if len(prices) < lookback or len(rsi) < lookback:
-            return 'none'
-
-        # Get valid RSI values
-        valid_rsi = [r for r in rsi[-lookback:] if r is not None]
-        if len(valid_rsi) < lookback:
-            return 'none'
-
-        prices_window = prices[-lookback:]
-        rsi_window = valid_rsi
-
-        # Find local lows and highs
-        price_low_idx = prices_window.index(min(prices_window))
-        price_high_idx = prices_window.index(max(prices_window))
-        rsi_low_idx = rsi_window.index(min(rsi_window))
-        rsi_high_idx = rsi_window.index(max(rsi_window))
-
-        current_price = prices_window[-1]
-        current_rsi = rsi_window[-1]
-
-        # Bullish divergence: price making lower lows, RSI making higher lows
-        if (price_low_idx > 2 and  # Recent low
-            current_price < prices_window[0] and  # Price lower
-            current_rsi > rsi_window[0]):  # RSI higher
-            return 'bullish'
-
-        # Bearish divergence: price making higher highs, RSI making lower highs
-        if (price_high_idx > 2 and  # Recent high
-            current_price > prices_window[0] and  # Price higher
-            current_rsi < rsi_window[0]):  # RSI lower
-            return 'bearish'
-
-        return 'none'
-
-    def is_bullish_candle(self, o, h, l, c) -> bool:
-        """Check if candle is bullish with good body"""
+    def is_strong_bullish_candle(self, o, h, l, c) -> Tuple[bool, str]:
+        """Check for strong bullish reversal patterns"""
         body = c - o
         range_hl = h - l
         if range_hl == 0:
-            return False
-        return body > 0 and body / range_hl > 0.5
+            return False, ""
 
-    def is_bearish_candle(self, o, h, l, c) -> bool:
-        """Check if candle is bearish with good body"""
+        body_pct = body / range_hl
+        upper_wick = h - c
+        lower_wick = o - l
+
+        # Bullish engulfing-like (strong body, small wicks)
+        if body > 0 and body_pct > 0.65:
+            return True, "Strong bullish body"
+
+        # Hammer (long lower wick, small upper wick)
+        if body >= 0 and lower_wick > abs(body) * 2 and upper_wick < abs(body) * 0.5:
+            return True, "Hammer"
+
+        # Morning star setup (previous bearish, current bullish with gap-like behavior)
+        if body > 0 and body_pct > 0.5 and lower_wick < body * 0.3:
+            return True, "Bullish momentum"
+
+        return False, ""
+
+    def is_strong_bearish_candle(self, o, h, l, c) -> Tuple[bool, str]:
+        """Check for strong bearish reversal patterns"""
         body = o - c
         range_hl = h - l
         if range_hl == 0:
-            return False
-        return body > 0 and body / range_hl > 0.5
+            return False, ""
 
-    def is_hammer(self, o, h, l, c) -> bool:
-        """Bullish reversal pattern"""
-        body = abs(c - o)
-        range_hl = h - l
-        if range_hl == 0 or body == 0:
-            return False
-        lower_wick = min(o, c) - l
-        upper_wick = h - max(o, c)
-        return lower_wick > body * 2 and upper_wick < body * 0.5
+        body_pct = body / range_hl
+        upper_wick = h - o
+        lower_wick = c - l
 
-    def is_shooting_star(self, o, h, l, c) -> bool:
-        """Bearish reversal pattern"""
-        body = abs(c - o)
-        range_hl = h - l
-        if range_hl == 0 or body == 0:
-            return False
-        lower_wick = min(o, c) - l
-        upper_wick = h - max(o, c)
-        return upper_wick > body * 2 and lower_wick < body * 0.5
+        # Bearish engulfing-like (strong body, small wicks)
+        if body > 0 and body_pct > 0.65:
+            return True, "Strong bearish body"
+
+        # Shooting star (long upper wick, small lower wick)
+        if body >= 0 and upper_wick > abs(body) * 2 and lower_wick < abs(body) * 0.5:
+            return True, "Shooting star"
+
+        # Evening star setup
+        if body > 0 and body_pct > 0.5 and upper_wick < body * 0.3:
+            return True, "Bearish momentum"
+
+        return False, ""
 
     def analyze(self, klines: List[Dict]) -> Optional[ScalpTrade]:
         """
-        High Win Rate Analysis - Multiple Confluence Required
+        Trend Following Pullback Analysis
 
-        Scoring System (need 6+ points):
-        - Bollinger Band touch: +2 points
-        - RSI divergence: +3 points (strongest signal)
-        - RSI extreme (<30 or >70): +2 points
-        - Trend alignment (200 EMA): +1 point
-        - Bullish/Bearish candle pattern: +1 point
-        - Hammer/Shooting star: +2 points
-        - Volume confirmation: +1 point
+        Entry Rules:
+        1. 200 EMA must have clear slope (trending)
+        2. Price must have pulled back to 21 or 50 EMA
+        3. RSI must be in neutral zone (not extreme)
+        4. Current candle must be strong reversal
+        5. Trade only in trend direction
         """
-        if len(klines) < 220:  # Need enough data for 200 EMA
+        if len(klines) < 220:
             return None
 
         closes = [k['close'] for k in klines]
@@ -245,169 +205,127 @@ class HyperScalper:
         lows = [k['low'] for k in klines]
         volumes = [k['volume'] for k in klines]
 
-        # Calculate all indicators
-        ema9 = self.ema(closes, self.ema_fast)
-        ema21 = self.ema(closes, self.ema_mid)
+        # Calculate indicators
+        ema21 = self.ema(closes, self.ema_fast)
         ema50 = self.ema(closes, self.ema_slow)
         ema200 = self.ema(closes, self.ema_trend)
         rsi = self.rsi(closes, self.rsi_period)
-        atr = self.atr(highs, lows, closes, 14)
-        bb_upper, bb_mid, bb_lower = self.bollinger_bands(closes, self.bb_period, self.bb_std)
+        atr = self.atr(highs, lows, closes, self.atr_period)
 
         # Current values
         price = closes[-1]
-        e9, e21, e50, e200 = ema9[-1], ema21[-1], ema50[-1], ema200[-1]
+        e21, e50, e200 = ema21[-1], ema50[-1], ema200[-1]
         curr_rsi = rsi[-1]
-        prev_rsi = rsi[-2] if rsi[-2] else 50
         curr_atr = atr[-1]
-        upper_bb = bb_upper[-1]
-        lower_bb = bb_lower[-1]
-        mid_bb = bb_mid[-1]
 
-        if None in [e9, e21, e50, e200, curr_rsi, curr_atr, upper_bb, lower_bb]:
+        if None in [e21, e50, e200, curr_rsi, curr_atr]:
             return None
 
-        # Current candle
+        # Current and previous candles
         o, h, l, c = opens[-1], highs[-1], lows[-1], closes[-1]
-        prev_o, prev_h, prev_l, prev_c = opens[-2], highs[-2], lows[-2], closes[-2]
 
-        # Volume analysis
+        # Volume check
         avg_vol = sum(volumes[-20:]) / 20
         curr_vol = volumes[-1]
-        high_volume = curr_vol > avg_vol * 1.2
+        good_volume = curr_vol >= avg_vol * 0.8  # At least 80% of average
 
-        # Detect divergence
-        divergence = self.detect_divergence(closes, rsi, 10)
+        # Calculate trend slope
+        trend_slope = self.get_trend_slope(ema200, 20)
 
-        # ===== SCORING SYSTEM =====
-        long_score = 0
-        short_score = 0
-        long_reasons = []
-        short_reasons = []
+        # ===== TREND DETECTION =====
+        uptrend = trend_slope > self.min_trend_slope and price > e200
+        downtrend = trend_slope < -self.min_trend_slope and price < e200
 
-        # 1. BOLLINGER BAND TOUCH (Mean Reversion at Extremes)
-        bb_range = upper_bb - lower_bb
-        near_lower = price <= lower_bb + bb_range * 0.05  # Within 5% of lower band
-        near_upper = price >= upper_bb - bb_range * 0.05  # Within 5% of upper band
-        touched_lower = l <= lower_bb
-        touched_upper = h >= upper_bb
+        if not uptrend and not downtrend:
+            return None  # No clear trend - skip
 
-        if touched_lower or near_lower:
-            long_score += 2
-            long_reasons.append("At lower Bollinger Band")
-
-        if touched_upper or near_upper:
-            short_score += 2
-            short_reasons.append("At upper Bollinger Band")
-
-        # 2. RSI DIVERGENCE (Strongest Reversal Signal)
-        if divergence == 'bullish':
-            long_score += 3
-            long_reasons.append("RSI bullish divergence")
-        elif divergence == 'bearish':
-            short_score += 3
-            short_reasons.append("RSI bearish divergence")
-
-        # 3. RSI EXTREME LEVELS
-        if curr_rsi < 30:
-            long_score += 2
-            long_reasons.append(f"RSI oversold ({curr_rsi:.0f})")
-        elif curr_rsi < 40:
-            long_score += 1
-            long_reasons.append(f"RSI low ({curr_rsi:.0f})")
-
-        if curr_rsi > 70:
-            short_score += 2
-            short_reasons.append(f"RSI overbought ({curr_rsi:.0f})")
-        elif curr_rsi > 60:
-            short_score += 1
-            short_reasons.append(f"RSI high ({curr_rsi:.0f})")
-
-        # 4. TREND ALIGNMENT (Trade with 200 EMA)
-        if price > e200:
-            long_score += 1
-            long_reasons.append("Above 200 EMA (uptrend)")
-        else:
-            short_score += 1
-            short_reasons.append("Below 200 EMA (downtrend)")
-
-        # 5. EMA ALIGNMENT (Short-term trend)
-        if e9 > e21:
-            long_score += 1
-            long_reasons.append("Short EMAs bullish")
-        elif e9 < e21:
-            short_score += 1
-            short_reasons.append("Short EMAs bearish")
-
-        # 6. CANDLESTICK PATTERNS
-        if self.is_bullish_candle(o, h, l, c):
-            long_score += 1
-            long_reasons.append("Bullish candle")
-        if self.is_bearish_candle(o, h, l, c):
-            short_score += 1
-            short_reasons.append("Bearish candle")
-
-        if self.is_hammer(prev_o, prev_h, prev_l, prev_c):
-            long_score += 2
-            long_reasons.append("Hammer pattern")
-        if self.is_shooting_star(prev_o, prev_h, prev_l, prev_c):
-            short_score += 2
-            short_reasons.append("Shooting star")
-
-        # Bullish engulfing
-        if prev_c < prev_o and c > o and c > prev_o and o < prev_c:
-            long_score += 2
-            long_reasons.append("Bullish engulfing")
-        # Bearish engulfing
-        if prev_c > prev_o and c < o and c < prev_o and o > prev_c:
-            short_score += 2
-            short_reasons.append("Bearish engulfing")
-
-        # 7. VOLUME CONFIRMATION
-        if high_volume and c > o:
-            long_score += 1
-            long_reasons.append("High volume buying")
-        if high_volume and c < o:
-            short_score += 1
-            short_reasons.append("High volume selling")
-
-        # 8. RSI TURNING (Momentum shift)
-        if curr_rsi > prev_rsi and curr_rsi < 60:
-            long_score += 1
-            long_reasons.append("RSI turning up")
-        if curr_rsi < prev_rsi and curr_rsi > 40:
-            short_score += 1
-            short_reasons.append("RSI turning down")
-
-        # ===== DETERMINE SIGNAL =====
         signal = ScalpSignal.NONE
-        strength = 0
         reasons = []
 
-        # Need minimum score AND no conflicting strong signals
-        if long_score >= self.min_strength and long_score > short_score + 2:
+        # ===== UPTREND: Look for long entries =====
+        if uptrend:
+            # Check for pullback to EMA
+            touched_ema21 = l <= e21 * 1.005 and l >= e21 * 0.99
+            touched_ema50 = l <= e50 * 1.005 and l >= e50 * 0.99
+            near_ema21 = abs(price - e21) / price < 0.008
+            near_ema50 = abs(price - e50) / price < 0.012
+
+            pullback_to_ema = touched_ema21 or touched_ema50 or near_ema21 or near_ema50
+
+            if not pullback_to_ema:
+                return None  # No pullback - skip
+
+            # RSI should be neutral (pulled back but not oversold)
+            rsi_ok = 35 <= curr_rsi <= 60
+            if not rsi_ok:
+                return None
+
+            # Check for strong bullish candle
+            is_bullish, pattern = self.is_strong_bullish_candle(o, h, l, c)
+            if not is_bullish:
+                return None
+
+            # Check price closed above EMA (bounce confirmed)
+            if c < e21 and c < e50:
+                return None  # Didn't bounce
+
+            # All conditions met!
             signal = ScalpSignal.LONG
-            strength = long_score
-            reasons = long_reasons
-        elif short_score >= self.min_strength and short_score > long_score + 2:
+            reasons = [
+                f"Uptrend (slope: {trend_slope:.1f}%)",
+                "Pullback to EMA",
+                pattern,
+                f"RSI: {curr_rsi:.0f}",
+                "Volume OK" if good_volume else "Volume low"
+            ]
+
+        # ===== DOWNTREND: Look for short entries =====
+        elif downtrend:
+            # Check for rally to EMA
+            touched_ema21 = h >= e21 * 0.995 and h <= e21 * 1.01
+            touched_ema50 = h >= e50 * 0.995 and h <= e50 * 1.01
+            near_ema21 = abs(price - e21) / price < 0.008
+            near_ema50 = abs(price - e50) / price < 0.012
+
+            rally_to_ema = touched_ema21 or touched_ema50 or near_ema21 or near_ema50
+
+            if not rally_to_ema:
+                return None  # No rally - skip
+
+            # RSI should be neutral (rallied but not overbought)
+            rsi_ok = 40 <= curr_rsi <= 65
+            if not rsi_ok:
+                return None
+
+            # Check for strong bearish candle
+            is_bearish, pattern = self.is_strong_bearish_candle(o, h, l, c)
+            if not is_bearish:
+                return None
+
+            # Check price closed below EMA (rejection confirmed)
+            if c > e21 and c > e50:
+                return None  # Didn't reject
+
+            # All conditions met!
             signal = ScalpSignal.SHORT
-            strength = short_score
-            reasons = short_reasons
+            reasons = [
+                f"Downtrend (slope: {trend_slope:.1f}%)",
+                "Rally to EMA",
+                pattern,
+                f"RSI: {curr_rsi:.0f}",
+                "Volume OK" if good_volume else "Volume low"
+            ]
 
         if signal == ScalpSignal.NONE:
             return None
 
-        # Calculate stops based on ATR (tighter for higher win rate setups)
-        # Use 1.2x ATR stop, 2.4x ATR target (2:1 RR)
-        atr_stop = 1.2
-        atr_tp = 2.4
-
+        # Calculate stops with 3:1 RR
         if signal == ScalpSignal.LONG:
-            stop_loss = price - (curr_atr * atr_stop)
-            take_profit = price + (curr_atr * atr_tp)
+            stop_loss = price - (curr_atr * self.atr_stop_mult)
+            take_profit = price + (curr_atr * self.atr_tp_mult)
         else:
-            stop_loss = price + (curr_atr * atr_stop)
-            take_profit = price - (curr_atr * atr_tp)
+            stop_loss = price + (curr_atr * self.atr_stop_mult)
+            take_profit = price - (curr_atr * self.atr_tp_mult)
 
         return ScalpTrade(
             signal=signal,
@@ -415,7 +333,7 @@ class HyperScalper:
             entry=price,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            strength=strength,
+            strength=8,  # High quality setups only
             reason=" | ".join(reasons)
         )
 
@@ -427,9 +345,9 @@ class QuickBacktest:
         self.initial_balance = initial_balance
         self.strategy = HyperScalper()
 
-        # Trading params - more conservative for higher win rate
-        self.leverage = 30  # Moderate leverage
-        self.risk_per_trade = 0.15  # 15% of account per trade
+        # Trading params - conservative for trend following
+        self.leverage = 20  # Lower leverage with wider stops
+        self.risk_per_trade = 0.10  # 10% of account per trade
         self.fee_pct = 0.04  # 0.04% taker fee
 
     def run(self, klines: List[Dict]) -> Dict:
@@ -446,10 +364,18 @@ class QuickBacktest:
         losses = 0
         total_pnl = 0
 
-        # Walk through data - start after 220 candles for 200 EMA
+        # Track daily trades
+        last_trade_candle = -100  # Minimum candles between trades
+
+        # Walk through data
         i = 220
         while i < len(klines) - 1:
-            # Get historical slice for analysis - need 220+ candles
+            # Minimum gap between trades (quality over quantity)
+            if i - last_trade_candle < 10:
+                i += 1
+                continue
+
+            # Get historical slice
             history = klines[max(0, i-250):i+1]
 
             # Get signal
@@ -460,19 +386,17 @@ class QuickBacktest:
                 position_value = balance * self.risk_per_trade * self.leverage
                 qty = position_value / trade.entry
 
-                # Simulate trade execution
                 entry_price = trade.entry
                 stop = trade.stop_loss
                 tp = trade.take_profit
 
-                # Check next candles for exit
-                for j in range(i + 1, min(i + 20, len(klines))):  # Max 20 candles hold
+                # Check next candles for exit (max 50 candles hold for trend trades)
+                for j in range(i + 1, min(i + 50, len(klines))):
                     candle = klines[j]
                     high = candle['high']
                     low = candle['low']
 
                     if trade.signal == ScalpSignal.LONG:
-                        # Check stop loss
                         if low <= stop:
                             pnl = (stop - entry_price) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -483,9 +407,9 @@ class QuickBacktest:
                                 'side': 'LONG', 'entry': entry_price,
                                 'exit': stop, 'pnl': pnl, 'result': 'STOP'
                             })
+                            last_trade_candle = j
                             i = j
                             break
-                        # Check take profit
                         if high >= tp:
                             pnl = (tp - entry_price) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -496,10 +420,10 @@ class QuickBacktest:
                                 'side': 'LONG', 'entry': entry_price,
                                 'exit': tp, 'pnl': pnl, 'result': 'TP'
                             })
+                            last_trade_candle = j
                             i = j
                             break
                     else:  # SHORT
-                        # Check stop loss
                         if high >= stop:
                             pnl = (entry_price - stop) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -510,9 +434,9 @@ class QuickBacktest:
                                 'side': 'SHORT', 'entry': entry_price,
                                 'exit': stop, 'pnl': pnl, 'result': 'STOP'
                             })
+                            last_trade_candle = j
                             i = j
                             break
-                        # Check take profit
                         if low <= tp:
                             pnl = (entry_price - tp) * qty
                             pnl -= position_value * self.fee_pct / 100 * 2
@@ -523,11 +447,12 @@ class QuickBacktest:
                                 'side': 'SHORT', 'entry': entry_price,
                                 'exit': tp, 'pnl': pnl, 'result': 'TP'
                             })
+                            last_trade_candle = j
                             i = j
                             break
                 else:
                     # Timeout - close at current price
-                    close_price = klines[min(i + 20, len(klines) - 1)]['close']
+                    close_price = klines[min(i + 50, len(klines) - 1)]['close']
                     if trade.signal == ScalpSignal.LONG:
                         pnl = (close_price - entry_price) * qty
                     else:
@@ -543,7 +468,8 @@ class QuickBacktest:
                         'side': trade.signal.value, 'entry': entry_price,
                         'exit': close_price, 'pnl': pnl, 'result': 'TIMEOUT'
                     })
-                    i = min(i + 20, len(klines) - 1)
+                    last_trade_candle = min(i + 50, len(klines) - 1)
+                    i = last_trade_candle
 
                 # Track drawdown
                 if balance > peak:
@@ -552,7 +478,6 @@ class QuickBacktest:
                 if dd > max_dd:
                     max_dd = dd
 
-                # Stop if blown
                 if balance <= 0:
                     break
 
@@ -571,7 +496,7 @@ class QuickBacktest:
             'losses': losses,
             'win_rate': win_rate,
             'max_drawdown': max_dd,
-            'trades': trades[-20:]  # Last 20 trades
+            'trades': trades[-20:]
         }
 
 
@@ -584,12 +509,11 @@ def test_hyper_scalper(symbol: str = "BTCUSDT", balance: float = 5.0, interval: 
     client = BinanceFuturesClient(config.api)
 
     print(f"\n{'='*60}")
-    print(f"  HYPER SCALPER v3 BACKTEST - {symbol}")
+    print(f"  TREND FOLLOWING PULLBACK v4 - {symbol}")
     print(f"  Initial Balance: ${balance:.2f}")
     print(f"  Timeframe: {interval}")
     print(f"{'='*60}\n")
 
-    # Fetch data
     print(f"Fetching {interval} candles...")
     klines = client.get_klines(symbol, interval, 1500)
 
@@ -599,11 +523,9 @@ def test_hyper_scalper(symbol: str = "BTCUSDT", balance: float = 5.0, interval: 
 
     print(f"Got {len(klines)} candles")
 
-    # Run backtest
     bt = QuickBacktest(initial_balance=balance)
     results = bt.run(klines)
 
-    # Print results
     print(f"\n{'='*60}")
     print(f"  RESULTS")
     print(f"{'='*60}")
@@ -618,7 +540,7 @@ def test_hyper_scalper(symbol: str = "BTCUSDT", balance: float = 5.0, interval: 
 
     print(f"\n--- Recent Trades ---")
     for t in results['trades'][-10:]:
-        emoji = "✅" if t['pnl'] > 0 else "❌"
+        emoji = "+" if t['pnl'] > 0 else "-"
         print(f"{emoji} {t['side']:5} | Entry: {t['entry']:.2f} | Exit: {t['exit']:.2f} | P&L: ${t['pnl']:+.2f} | {t['result']}")
 
     print(f"{'='*60}\n")
