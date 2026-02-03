@@ -248,15 +248,27 @@ class RiskManager:
     def calculate_position_size(
         self,
         signal: TradingSignal,
-        account_balance: float
-    ) -> Tuple[float, float]:
+        account_balance: float,
+        leverage: int = 20,
+        min_notional: float = 5.0
+    ) -> Tuple[float, float, int]:
         """
         Calculate position size based on risk parameters
+        Automatically adjusts leverage for small accounts to meet minimum notional
 
-        Returns (quantity in base asset, position value in USDT)
+        Returns (quantity in base asset, position value in USDT, required leverage)
         """
-        # Base risk percentage
-        risk_pct = self.config.default_risk_pct
+        # Minimum notional for Binance Futures (usually $5-10)
+        MIN_NOTIONAL = max(min_notional, 5.0)
+        MAX_LEVERAGE = 125  # Binance max for most pairs
+
+        # Base risk percentage - use more of balance for small accounts
+        if account_balance < 10:
+            risk_pct = 80.0  # Use 80% of tiny accounts
+        elif account_balance < 50:
+            risk_pct = 50.0  # Use 50% of small accounts
+        else:
+            risk_pct = self.config.default_risk_pct
 
         # Adjust for consecutive losses
         if self.config.reduce_size_after_losses and self.consecutive_losses >= 2:
@@ -275,21 +287,39 @@ class RiskManager:
 
         # Calculate position size based on stop loss distance
         stop_distance_pct = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
-        position_value = dollar_risk / stop_distance_pct
+        position_value = dollar_risk / stop_distance_pct if stop_distance_pct > 0 else dollar_risk
 
-        # Cap at maximum position size
+        # Cap at maximum position size based on balance
         max_position = account_balance * (self.config.max_position_size_pct / 100)
         position_value = min(position_value, max_position)
+
+        # Ensure minimum notional is met
+        if position_value < MIN_NOTIONAL:
+            position_value = MIN_NOTIONAL
+            logger.info(f"Adjusted position to minimum notional: ${MIN_NOTIONAL}")
+
+        # Calculate required leverage
+        margin_available = account_balance * 0.95  # Keep 5% buffer
+        required_leverage = int(position_value / margin_available) + 1
+        required_leverage = max(leverage, required_leverage)
+        required_leverage = min(required_leverage, MAX_LEVERAGE)
+
+        # Final margin check - can we afford this position?
+        margin_required = position_value / required_leverage
+        if margin_required > account_balance:
+            # Reduce position to fit available margin
+            position_value = account_balance * required_leverage * 0.9  # 90% of max
 
         # Calculate quantity
         quantity = position_value / signal.entry_price
 
         logger.info(
-            f"Position sizing: Risk {risk_pct:.2f}% = ${dollar_risk:.2f} | "
-            f"Position: ${position_value:.2f} ({quantity:.6f} units)"
+            f"Position sizing: Balance ${account_balance:.2f} | "
+            f"Position: ${position_value:.2f} | Leverage: {required_leverage}x | "
+            f"Quantity: {quantity:.6f} | Margin: ${position_value/required_leverage:.2f}"
         )
 
-        return quantity, position_value
+        return quantity, position_value, required_leverage
 
     def can_open_trade(self, signal: TradingSignal) -> Tuple[bool, str]:
         """

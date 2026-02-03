@@ -95,9 +95,9 @@ class StrategyConfig:
     confirmation_timeframes: List[str] = field(default_factory=lambda: ["1h", "4h"])
 
     # Entry conditions
-    min_signal_strength: int = 4  # Minimum signal strength (out of 10)
-    require_volume_confirmation: bool = True
-    volume_threshold_multiplier: float = 1.5
+    min_signal_strength: int = 3  # Minimum signal strength (out of 10) - lowered for more signals
+    require_volume_confirmation: bool = False  # Disabled for more frequent signals
+    volume_threshold_multiplier: float = 1.0  # Lowered threshold
 
     # RSI settings
     rsi_period: int = 14

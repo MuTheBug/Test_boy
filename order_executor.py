@@ -37,6 +37,7 @@ class ExecutionPlan:
     quantity: float
     position_value: float
     execution_mode: ExecutionMode
+    leverage: int = 20
     twap_duration: Optional[int] = None
 
 
@@ -77,12 +78,13 @@ class OrderExecutor:
 
         Determines:
         - Position size
+        - Leverage (auto-adjusted for small accounts)
         - Execution mode (Market/TWAP/VP)
         - Order parameters
         """
-        # Calculate position size
-        quantity, position_value = self.risk_manager.calculate_position_size(
-            signal, account_balance
+        # Calculate position size with auto-leverage adjustment
+        quantity, position_value, leverage = self.risk_manager.calculate_position_size(
+            signal, account_balance, leverage=self.config.default_leverage
         )
 
         # Validate order
@@ -106,6 +108,7 @@ class OrderExecutor:
             quantity=quantity,
             position_value=position_value,
             execution_mode=execution_mode,
+            leverage=leverage,
             twap_duration=twap_duration
         )
 
@@ -152,8 +155,16 @@ class OrderExecutor:
         signal = plan.signal
         logger.info(
             f"Executing trade: {signal.symbol} {signal.signal_type.value} | "
-            f"Mode: {plan.execution_mode.value} | Qty: {plan.quantity:.6f}"
+            f"Mode: {plan.execution_mode.value} | Qty: {plan.quantity:.6f} | "
+            f"Leverage: {plan.leverage}x"
         )
+
+        # Set leverage for this symbol
+        leverage_set = self.client.set_leverage(signal.symbol, plan.leverage)
+        if leverage_set:
+            logger.info(f"Leverage set to {plan.leverage}x for {signal.symbol}")
+        else:
+            logger.warning(f"Could not set leverage to {plan.leverage}x, using current setting")
 
         # Determine order side
         order_side = OrderSide.BUY if signal.signal_type == SignalType.LONG else OrderSide.SELL
