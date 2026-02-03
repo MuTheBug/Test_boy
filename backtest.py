@@ -113,6 +113,8 @@ class Backtester:
         limit: int = 1000
     ) -> List[Dict]:
         """Fetch historical kline data from Binance"""
+        # Binance API max is 1500 candles per request
+        limit = min(limit, 1500)
         logger.info(f"Fetching {limit} {interval} candles for {symbol}...")
 
         klines = self.client.get_klines(symbol, interval, limit)
