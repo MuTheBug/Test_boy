@@ -150,6 +150,9 @@ class StrategyConfig:
     tp2_size_pct: float = 30.0  # Close 30% at TP2
     tp3_size_pct: float = 30.0  # Close remaining 30% at TP3
 
+    # Risk/Reward filter
+    min_risk_reward: float = 1.5  # Minimum 1:1.5 R:R ratio
+
 
 @dataclass
 class AlgoOrderConfig:
