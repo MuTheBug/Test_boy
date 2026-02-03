@@ -95,7 +95,7 @@ class StrategyConfig:
     confirmation_timeframes: List[str] = field(default_factory=lambda: ["1h", "4h"])
 
     # Entry conditions
-    min_signal_strength: int = 5  # Minimum signal strength (out of 10) - higher for quality
+    min_signal_strength: int = 3  # Minimum signal strength (out of 10) - more trades
     require_volume_confirmation: bool = False  # Disabled for more frequent signals
     volume_threshold_multiplier: float = 1.0  # Lowered threshold
 

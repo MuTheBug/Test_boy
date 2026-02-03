@@ -998,14 +998,15 @@ class AMRVFStrategy:
                     if htf_trend in [TrendDirection.DOWNTREND, TrendDirection.STRONG_DOWNTREND]:
                         confirmations += 1
 
-        # Require at least one HTF confirmation
+        # HTF confirmation is optional but boosts signal
         if confirmations == 0:
-            logger.debug(f"{symbol}: Signal rejected - no HTF confirmation")
-            return None
-
-        # Boost signal strength with confirmations
-        primary_signal.strength = min(10, primary_signal.strength + confirmations)
-        primary_signal.confidence = min(1.0, primary_signal.confidence + 0.1 * confirmations)
-        primary_signal.reasons.append(f"{confirmations} higher timeframe confirmation(s)")
+            # Still allow signal but reduce strength
+            primary_signal.strength = max(1, primary_signal.strength - 1)
+            primary_signal.reasons.append("No HTF confirmation (counter-trend)")
+        else:
+            # Boost signal strength with confirmations
+            primary_signal.strength = min(10, primary_signal.strength + confirmations)
+            primary_signal.confidence = min(1.0, primary_signal.confidence + 0.1 * confirmations)
+            primary_signal.reasons.append(f"{confirmations} higher timeframe confirmation(s)")
 
         return primary_signal
