@@ -112,18 +112,54 @@ class Backtester:
         interval: str = "15m",
         limit: int = 1000
     ) -> List[Dict]:
-        """Fetch historical kline data from Binance"""
-        # Binance API max is 1500 candles per request
-        limit = min(limit, 1500)
+        """Fetch historical kline data from Binance with pagination for longer periods"""
+        MAX_PER_REQUEST = 1500
+        all_klines = []
+
+        # Calculate how many requests needed
+        remaining = limit
+        end_time = None
+
         logger.info(f"Fetching {limit} {interval} candles for {symbol}...")
 
-        klines = self.client.get_klines(symbol, interval, limit)
-        if not klines:
-            logger.error(f"Failed to fetch data for {symbol}")
-            return []
+        while remaining > 0:
+            fetch_limit = min(remaining, MAX_PER_REQUEST)
 
-        logger.info(f"Fetched {len(klines)} candles")
-        return klines
+            # Build params
+            params = {
+                'symbol': symbol,
+                'interval': interval,
+                'limit': fetch_limit
+            }
+            if end_time:
+                params['endTime'] = end_time
+
+            # Fetch batch
+            klines = self.client.get_klines(symbol, interval, fetch_limit)
+            if not klines:
+                if not all_klines:
+                    logger.error(f"Failed to fetch data for {symbol}")
+                    return []
+                break
+
+            # Prepend to list (older data first)
+            if all_klines:
+                # Get the oldest timestamp from current batch
+                end_time = klines[0]['timestamp'] - 1
+                all_klines = klines + all_klines
+            else:
+                all_klines = klines
+                if len(klines) > 0:
+                    end_time = klines[0]['timestamp'] - 1
+
+            remaining -= len(klines)
+
+            # If we got less than requested, no more data available
+            if len(klines) < fetch_limit:
+                break
+
+        logger.info(f"Fetched {len(all_klines)} candles total")
+        return all_klines
 
     def run_backtest(
         self,

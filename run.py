@@ -155,6 +155,19 @@ Environment Variables:
         help='Run backtest on multiple symbols'
     )
 
+    parser.add_argument(
+        '--balance',
+        type=float,
+        default=5.0,
+        help='Initial balance for backtest (default: 5.0 USDT)'
+    )
+
+    parser.add_argument(
+        '--interval',
+        default='15m',
+        help='Timeframe for backtest: 5m, 15m, 1h, 4h (default: 15m)'
+    )
+
     args = parser.parse_args()
 
     # Setup environment
@@ -169,17 +182,20 @@ Environment Variables:
         print("\n" + "=" * 50)
         print("  BACKTEST MODE")
         print("  AMR-VF Strategy")
-        print("=" * 50 + "\n")
+        print("=" * 50)
+        print(f"\n  Initial Balance: ${args.balance:.2f}")
+        print(f"  Timeframe: {args.interval}")
+        print(f"  Candles: {args.candles}\n")
 
         from backtest import Backtester
 
-        backtester = Backtester(initial_balance=10000.0)
+        backtester = Backtester(initial_balance=args.balance)
 
         if args.multi_backtest:
             symbols = ['BTCUSDT', 'ETHUSDT']  # Only profitable pairs
-            backtester.run_multi_symbol_backtest(symbols, '15m', args.candles)
+            backtester.run_multi_symbol_backtest(symbols, args.interval, args.candles)
         else:
-            result = backtester.run_backtest(args.symbol, '15m', args.candles)
+            result = backtester.run_backtest(args.symbol, args.interval, args.candles)
             backtester.print_results(result)
 
         sys.exit(0)
