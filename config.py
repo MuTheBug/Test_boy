@@ -95,7 +95,7 @@ class StrategyConfig:
     confirmation_timeframes: List[str] = field(default_factory=lambda: ["1h", "4h"])
 
     # Entry conditions
-    min_signal_strength: int = 3  # Minimum signal strength (out of 10) - lowered for more signals
+    min_signal_strength: int = 5  # Minimum signal strength (out of 10) - higher for quality
     require_volume_confirmation: bool = False  # Disabled for more frequent signals
     volume_threshold_multiplier: float = 1.0  # Lowered threshold
 
@@ -124,10 +124,10 @@ class StrategyConfig:
 
     # ATR for volatility
     atr_period: int = 14
-    atr_multiplier_sl: float = 1.5  # Stop loss at 1.5x ATR
+    atr_multiplier_sl: float = 2.5  # Stop loss at 2.5x ATR (wider stop)
     atr_multiplier_tp1: float = 2.0  # TP1 at 2x ATR
-    atr_multiplier_tp2: float = 3.0  # TP2 at 3x ATR
-    atr_multiplier_tp3: float = 5.0  # TP3 at 5x ATR
+    atr_multiplier_tp2: float = 4.0  # TP2 at 4x ATR
+    atr_multiplier_tp3: float = 6.0  # TP3 at 6x ATR
 
     # Volatility regime
     low_volatility_threshold: float = 0.5  # Below 50% of average ATR
@@ -151,7 +151,7 @@ class StrategyConfig:
     tp3_size_pct: float = 30.0  # Close remaining 30% at TP3
 
     # Risk/Reward filter
-    min_risk_reward: float = 1.5  # Minimum 1:1.5 R:R ratio
+    min_risk_reward: float = 1.0  # Minimum 1:1 R:R ratio (wider stops need lower RR)
 
 
 @dataclass
