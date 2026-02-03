@@ -57,16 +57,20 @@ class APIConfig:
 class RiskConfig:
     """Risk Management Configuration"""
     # Position sizing
-    max_position_size_pct: float = 2.0  # Max 2% of account per trade
-    max_daily_loss_pct: float = 5.0  # Stop trading after 5% daily loss
-    max_total_exposure_pct: float = 20.0  # Max 20% total exposure
+    max_position_size_pct: float = 50.0  # Max 50% of account per trade (for small accounts)
+    max_daily_loss_pct: float = 10.0  # Stop trading after 10% daily loss
+    max_total_exposure_pct: float = 80.0  # Max 80% total exposure (for small accounts)
     max_trades_per_day: int = 10
-    max_concurrent_positions: int = 5
+    max_concurrent_positions: int = 3  # Fewer for small accounts
 
     # Risk per trade
-    default_risk_pct: float = 1.0  # 1% risk per trade
-    max_risk_pct: float = 2.0  # Never risk more than 2%
-    min_risk_reward: float = 2.0  # Minimum 1:2 RR ratio
+    default_risk_pct: float = 5.0  # 5% risk per trade (higher for small accounts)
+    max_risk_pct: float = 10.0  # Max 10% for small accounts
+    min_risk_reward: float = 1.5  # Minimum 1:1.5 RR ratio
+
+    # Minimum balance and position
+    min_balance_usdt: float = 5.0  # Minimum balance to trade
+    min_position_usdt: float = 5.0  # Minimum position size in USDT
 
     # Stop loss settings
     use_trailing_stop: bool = True
@@ -194,9 +198,9 @@ class BotConfig:
         "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"
     ])
 
-    # Default leverage
-    default_leverage: int = 10
-    max_leverage: int = 20
+    # Default leverage (higher for small accounts to meet min notional)
+    default_leverage: int = 20
+    max_leverage: int = 50
 
     # Scanning settings
     scan_interval_seconds: int = 60

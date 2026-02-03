@@ -130,6 +130,31 @@ Environment Variables:
         help='Show configuration status and exit'
     )
 
+    parser.add_argument(
+        '--backtest', '-b',
+        action='store_true',
+        help='Run backtest instead of live/paper trading'
+    )
+
+    parser.add_argument(
+        '--symbol',
+        default='BTCUSDT',
+        help='Symbol for backtest (default: BTCUSDT)'
+    )
+
+    parser.add_argument(
+        '--candles',
+        type=int,
+        default=1000,
+        help='Number of candles for backtest (default: 1000)'
+    )
+
+    parser.add_argument(
+        '--multi-backtest',
+        action='store_true',
+        help='Run backtest on multiple symbols'
+    )
+
     args = parser.parse_args()
 
     # Setup environment
@@ -139,7 +164,27 @@ Environment Variables:
         show_status()
         sys.exit(0)
 
-    # Validate configuration
+    # Handle backtest mode
+    if args.backtest or args.multi_backtest:
+        print("\n" + "=" * 50)
+        print("  BACKTEST MODE")
+        print("  AMR-VF Strategy")
+        print("=" * 50 + "\n")
+
+        from backtest import Backtester
+
+        backtester = Backtester(initial_balance=10000.0)
+
+        if args.multi_backtest:
+            symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+            backtester.run_multi_symbol_backtest(symbols, '15m', args.candles)
+        else:
+            result = backtester.run_backtest(args.symbol, '15m', args.candles)
+            backtester.print_results(result)
+
+        sys.exit(0)
+
+    # Validate configuration for live/paper mode
     validate_config()
 
     # Show startup info
