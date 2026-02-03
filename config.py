@@ -195,10 +195,9 @@ class BotConfig:
     mode: TradingMode = TradingMode.PAPER
     position_mode: PositionMode = PositionMode.ONE_WAY
 
-    # Trading pairs
+    # Trading pairs (focus on majors - best backtest results)
     symbols: List[str] = field(default_factory=lambda: [
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"
+        "BTCUSDT", "ETHUSDT"
     ])
 
     # Default leverage (higher for small accounts to meet min notional)
